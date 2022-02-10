@@ -25,73 +25,11 @@ import numpy as np
 import torch
 
 from megatron import mpu, print_rank_0
-from megatron.data.dataset_utils import get_train_valid_test_split_
-from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
-
-
-def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
-                                    train_valid_test_num_samples,
-                                    seq_length, seed, skip_warmup):
-    """Build train, valid, and test datasets."""
-
-    # Indexed dataset.
-    indexed_dataset = get_indexed_dataset_(data_prefix,
-                                           data_impl,
-                                           skip_warmup)
-
-    total_num_of_documents = indexed_dataset.sizes.shape[0]
-    splits = get_train_valid_test_split_(splits_string, total_num_of_documents)
-
-    # Print stats about the splits.
-    print_rank_0(' > dataset split:')
-
-    def print_split_stats(name, index):
-        print_rank_0('    {}:'.format(name))
-        print_rank_0('     document indices in [{}, {}) total of {} '
-                     'documents'.format(splits[index], splits[index + 1],
-                                        splits[index + 1] - splits[index]))
-    print_split_stats('train', 0)
-    print_split_stats('validation', 1)
-    print_split_stats('test', 2)
-
-    def build_dataset(index, name):
-        dataset = None
-        if splits[index + 1] > splits[index]:
-            documents = np.arange(start=splits[index], stop=splits[index + 1],
-                                  step=1, dtype=np.int32)
-            dataset = GPT2Dataset(name, data_prefix,
-                                  documents, indexed_dataset,
-                                  train_valid_test_num_samples[index],
-                                  seq_length, seed)
-        return dataset
-
-    train_dataset = build_dataset(0, 'train')
-    valid_dataset = build_dataset(1, 'valid')
-    test_dataset = build_dataset(2, 'test')
-
-    return train_dataset, valid_dataset, test_dataset
-
-
-def get_indexed_dataset_(data_prefix, data_impl, skip_warmup):
-    """Build indexed dataset."""
-    print_rank_0(' > building dataset index ...')
-
-    start_time = time.time()
-    indexed_dataset = make_indexed_dataset(data_prefix,
-                                           data_impl,
-                                           skip_warmup)
-    print_rank_0(' > finished creating indexed dataset in {:4f} '
-                 'seconds'.format(time.time() - start_time))
-    print_rank_0('    number of documents: {}'.format(
-        indexed_dataset.sizes.shape[0]))
-
-    return indexed_dataset
-
 
 class GPT2Dataset(torch.utils.data.Dataset):
 
     def __init__(self, name, data_prefix, documents, indexed_dataset,
-                 num_samples, seq_length, seed):
+                 num_samples, seq_length, seed, build_index_mappings=True):
 
         self.name = name
         self.indexed_dataset = indexed_dataset
@@ -100,43 +38,52 @@ class GPT2Dataset(torch.utils.data.Dataset):
         assert np.min(documents) >= 0
         assert np.max(documents) < indexed_dataset.sizes.shape[0]
 
-        # Build index mappings.
-        self.doc_idx, self.sample_idx, self.shuffle_idx = _build_index_mappings(
-            self.name, data_prefix, documents, self.indexed_dataset.sizes,
-            num_samples, seq_length, seed)
+        if build_index_mappings:
+            # Build index mappings.
+            self.doc_idx, self.sample_idx, self.shuffle_idx = _build_index_mappings(
+                self.name, data_prefix, documents, self.indexed_dataset.sizes,
+                num_samples, seq_length, seed)
+            self.shuffle_idx_len = self.shuffle_idx.shape[0] - 1
+            self.sample_idx_len = self.sample_idx.shape[0] - 1
+
+            if self.shuffle_idx_len != self.sample_idx_len:
+                print(f'WARNING: shuffle index length ({self.shuffle_idx_len}) is not equal to sample index length ({self.sample_idx_len})')
 
     def __len__(self):
-        # -1 is due to data structure used to retieve the index:
-        #    sample i --> [sample_idx[i], sample_idx[i+1])
-        return self.sample_idx.shape[0] - 1
+        return min(self.shuffle_idx_len, self.sample_idx_len)
 
     def __getitem__(self, idx):
-        # Get the shuffled index.
-        idx = self.shuffle_idx[idx]
-        # Start and end documents and offsets.
-        doc_index_f = self.sample_idx[idx][0]
-        doc_index_l = self.sample_idx[idx + 1][0]
-        offset_f = self.sample_idx[idx][1]
-        offset_l = self.sample_idx[idx + 1][1]
-        # If we are within the same document, just extract the chunk.
-        if doc_index_f == doc_index_l:
-            sample = self.indexed_dataset.get(self.doc_idx[doc_index_f],
-                                              offset=offset_f,
-                                              length=offset_l - offset_f + 1)
-        else:
-            # Otherwise, get the rest of the initial document.
-            sample_list = [self.indexed_dataset.get(self.doc_idx[doc_index_f],
-                                                    offset=offset_f)]
-            # Loop over all in between documents and add the entire document.
-            for i in range(doc_index_f + 1, doc_index_l):
-                sample_list.append(self.indexed_dataset.get(self.doc_idx[i]))
-            # And finally add the relevant portion of last document.
-            sample_list.append(self.indexed_dataset.get(
-                self.doc_idx[doc_index_l],
-                length=offset_l + 1))
-            sample = np.concatenate(sample_list)
+        try:
+            # Get the shuffled index.
+            idx = self.shuffle_idx[idx]
+            # Start and end documents and offsets.
+            doc_index_f = self.sample_idx[idx][0]
+            doc_index_l = self.sample_idx[idx + 1][0]
+            offset_f = self.sample_idx[idx][1]
+            offset_l = self.sample_idx[idx + 1][1]
+            # If we are within the same document, just extract the chunk.
+            if doc_index_f == doc_index_l:
+                sample = self.indexed_dataset.get(self.doc_idx[doc_index_f],
+                                                  offset=offset_f,
+                                                  length=offset_l - offset_f + 1)
+            else:
+                # Otherwise, get the rest of the initial document.
+                sample_list = [self.indexed_dataset.get(self.doc_idx[doc_index_f],
+                                                        offset=offset_f)]
+                # Loop over all in between documents and add the entire document.
+                for i in range(doc_index_f + 1, doc_index_l):
+                    sample_list.append(self.indexed_dataset.get(self.doc_idx[i]))
+                # And finally add the relevant portion of last document.
+                sample_list.append(self.indexed_dataset.get(
+                    self.doc_idx[doc_index_l],
+                    length=offset_l + 1))
+                sample = np.concatenate(sample_list)
 
-        return {'text': np.array(sample, dtype=np.int64)}
+            return {'text': np.array(sample, dtype=np.int64)}
+        except IndexError:
+            new_idx = idx % len(self)
+            print(f'WARNING: Got index out of bounds error with index {idx} - taking modulo of index instead ({new_idx})')
+            return self[new_idx]
 
 
 def _build_index_mappings(name, data_prefix, documents, sizes,
@@ -166,9 +113,8 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
     # Build the indexed mapping if not exist.
     if torch.distributed.get_rank() == 0:
         if (not os.path.isfile(doc_idx_filename)) or \
-           (not os.path.isfile(sample_idx_filename)) or \
-           (not os.path.isfile(shuffle_idx_filename)):
-
+                (not os.path.isfile(sample_idx_filename)) or \
+                (not os.path.isfile(shuffle_idx_filename)):
             print_rank_0(' > WARNING: could not find index map files, building '
                          'the indices on rank 0 ...')
             # doc-idx.
@@ -180,9 +126,6 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
             # sample-idx.
             start_time = time.time()
             # Use C++ implementation for speed.
-            # First compile and then import.
-            from megatron.data.dataset_utils import compile_helper
-            compile_helper()
             from megatron.data import helpers
             assert doc_idx.dtype == np.int32
             assert sizes.dtype == np.int32
@@ -236,7 +179,7 @@ def _num_tokens(documents, sizes):
 
 
 def _num_epochs(tokens_per_epoch, seq_length, num_samples):
-    """Based on number of samples and sequence lenght, calculate how many
+    """Based on number of samples and sequence length, calculate how many
     epochs will be needed."""
     num_epochs = 0
     total_tokens = 0
@@ -251,7 +194,7 @@ def _num_epochs(tokens_per_epoch, seq_length, num_samples):
 
 
 def _build_doc_idx(documents, num_epochs, np_rng):
-    """Build an array with length = number-of-epochs * number-of-dcuments.
+    """Build an array with length = number-of-epochs * number-of-documents.
     Each index is mapped to a corresponding document."""
     doc_idx = np.mgrid[0:num_epochs, 0:len(documents)][1]
     doc_idx[:] = documents
@@ -276,7 +219,7 @@ def _build_sample_idx(sizes, doc_idx, seq_length,
     sample_index = 0
     # Index into doc_idx.
     doc_idx_index = 0
-    # Begining offset for each document.
+    # Beginning offset for each document.
     doc_offset = 0
     # Start with first document and no offset.
     sample_idx[sample_index][0] = doc_idx_index
@@ -299,7 +242,7 @@ def _build_sample_idx(sizes, doc_idx, seq_length,
                 doc_offset += (remaining_seq_length + doc_length - 1)
                 remaining_seq_length = 0
             else:
-                # Otherwise, start from the begining of the next document.
+                # Otherwise, start from the beginning of the next document.
                 doc_idx_index += 1
                 doc_offset = 0
         # Record the sequence.
@@ -318,3 +261,5 @@ def _build_shuffle_idx(size, np_rng):
     shuffle_idx = np.arange(start=0, stop=size, step=1, dtype=dtype_)
     np_rng.shuffle(shuffle_idx)
     return shuffle_idx
+
+

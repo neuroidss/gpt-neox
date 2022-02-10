@@ -39,13 +39,16 @@ _MPU_RANK = None
 # Used to query 3D topology
 _MPU_TOPOLOGY = None
 
+# Get fp32_allreduce flag
+_FP32_ALLREDUCE = None
+
 
 def is_unitialized():
     """Useful for code segments that may be accessed with or without mpu initialization"""
     return _DATA_PARALLEL_GROUP is None
 
 
-def initialize_model_parallel(model_parallel_size_, topology=None):
+def initialize_model_parallel(model_parallel_size, topology=None, fp32_allreduce=False):
     """
     Initialize model data parallel groups.
 
@@ -66,11 +69,12 @@ def initialize_model_parallel(model_parallel_size_, topology=None):
     """
     if torch.distributed.get_rank() == 0:
         print('> initializing model parallel with size {}'.format(
-            model_parallel_size_))
+            model_parallel_size))
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
     world_size = torch.distributed.get_world_size()
-    model_parallel_size = min(model_parallel_size_, world_size)
+    if world_size < model_parallel_size:
+        raise ValueError("world size cannot be smaller than model parallel size")
     ensure_divisibility(world_size, model_parallel_size)
     rank = torch.distributed.get_rank()
 
@@ -151,6 +155,10 @@ def initialize_model_parallel(model_parallel_size_, topology=None):
             group = torch.distributed.new_group(ranks)
             if i == (rank // model_parallel_size):
                 _MODEL_PARALLEL_GROUP = group
+
+    global _FP32_ALLREDUCE
+    assert _FP32_ALLREDUCE is None, 'fp32_allreduce is already initialized'
+    _FP32_ALLREDUCE = fp32_allreduce
 
 
 def model_parallel_is_initialized():
@@ -270,3 +278,22 @@ def destroy_model_parallel():
     _MODEL_PARALLEL_GROUP = None
     global _DATA_PARALLEL_GROUP
     _DATA_PARALLEL_GROUP = None
+    global _PIPE_PARALLEL_GROUP
+    _PIPE_PARALLEL_GROUP = None
+    global _IO_PARALLEL_GROUP
+    _IO_PARALLEL_GROUP = None
+    global _MPU_WORLD_SIZE
+    global _MPU_RANK
+    _MPU_WORLD_SIZE = None
+    _MPU_RANK = None
+    global _MPU_TOPOLOGY
+    _MPU_TOPOLOGY = None
+    global _FP32_ALLREDUCE
+    _FP32_ALLREDUCE = None
+
+
+def get_fp32_allreduce():
+    """Get the fp32 allreduce flag"""
+    assert _FP32_ALLREDUCE is not None, \
+        'fp32_allreduce is not Initialized'
+    return _FP32_ALLREDUCE

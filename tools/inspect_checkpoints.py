@@ -1,13 +1,14 @@
 # Adapted from https://github.com/awaelchli/pytorch-lightning-snippets/blob/master/checkpoint/peek.py
 
 import code
+import os
+import re
 from argparse import ArgumentParser, Namespace
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-import pdb
+
 import torch
-import os
-import re
+
 
 class COLORS:
     BLUE = "\033[94m"
@@ -28,6 +29,12 @@ def natural_sort(l):
     alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', str(key))]
     return sorted(l, key=alphanum_key)
 
+def sizeof_fmt(num, suffix='B'):
+    for unit in ['','Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
+        if abs(num) < 1024.0:
+            return "%3.1f%s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.1f%s%s" % (num, 'Yi', suffix)
 
 def pretty_print(contents: dict):
     """ Prints a nice summary of the top-level contens in a checkpoint dictionary. """
@@ -53,6 +60,7 @@ def pretty_print(contents: dict):
                 line += f"{COLORS.CYAN}shape={list(v.shape)}{COLORS.END}"
                 line += ", "
                 line += f"{COLORS.CYAN}dtype={v.dtype}{COLORS.END}"
+            line += ", " + f"{COLORS.CYAN}size={sizeof_fmt(v.nelement() * v.element_size())}{COLORS.END}"
         print(line)
 
 

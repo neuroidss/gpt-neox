@@ -1,20 +1,24 @@
 import torch
+from torch.nn import LayerNorm as LayerNorm
 
-# default to FusedLayerNorm
-try:
-    from apex.normalization.fused_layer_norm import FusedLayerNorm as LayerNorm
 
-    # Try to use FusedLayerNorm from Apex - this will trigger an error.
-    _ = LayerNorm(8, eps=1e-5)
-
-except Exception as e:
-    print('WARNING: APEX is not installed, using torch.nn.LayerNorm '
-          'instead of apex.normalization.FusedLayerNorm!')
-    from torch.nn import LayerNorm
+def get_norm(neox_args):
+    if neox_args.norm == "rmsnorm":
+        norm = RMSNorm
+        eps = neox_args.rms_norm_epsilon
+    elif neox_args.norm == "layernorm":
+        eps = neox_args.layernorm_epsilon
+        norm = LayerNorm
+    elif neox_args.norm == "scalenorm":
+        eps = neox_args.scalenorm_epsilon
+        norm = ScaleNorm
+    else:
+        raise ValueError(f"norm {neox_args.norm} not recognized")
+    return norm, eps
 
 
 class RMSNorm(torch.nn.Module):
-    def __init__(self, dim, p=-1., eps=1e-8, bias=False):
+    def __init__(self, dim, p=-1.0, eps=1e-8, bias=False):
         """
             Root Mean Square Layer Normalization
         :param dim: model size
@@ -38,7 +42,7 @@ class RMSNorm(torch.nn.Module):
             self.register_parameter("offset", self.offset)
 
     def forward(self, x):
-        if self.p < 0. or self.p > 1.:
+        if self.p < 0.0 or self.p > 1.0:
             norm_x = x.norm(2, dim=-1, keepdim=True)
             d_x = self.d
         else:
@@ -48,7 +52,7 @@ class RMSNorm(torch.nn.Module):
             norm_x = partial_x.norm(2, dim=-1, keepdim=True)
             d_x = partial_size
 
-        rms_x = norm_x * d_x ** (-1. / 2)
+        rms_x = norm_x * d_x ** (-1.0 / 2)
         x_normed = x / (rms_x + self.eps)
 
         if self.bias:

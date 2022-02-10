@@ -13,66 +13,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
+
 import deepspeed
 from deepspeed.launcher.runner import main
-import requests
-import subprocess
-import json
-
-from megatron.config_monster import ConfigMonster
-import logging
-
-from megatron.logging import Tee
 
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
 
-
-def get_wandb_api_key():
-    """ Get Weights and Biases API key from ENV or .netrc file. Otherwise return None """
-    if 'WANDB_API_KEY' in os.environ:
-        return os.environ['WANDB_API_KEY']
-
-    wandb_token = requests.utils.get_netrc_auth('https://api.wandb.ai')
-
-    if wandb_token is not None:
-        return wandb_token[1]
+from megatron.neox_arguments import NeoXArgs
+from megatron.utils import get_wandb_api_key
 
 
-def get_git_commit_hash():
-    """ Gets the git commit hash of your current repo (if it exists) """
-    try:
-        git_hash = subprocess.check_output(["git", "describe", "--always"]).strip()
-        git_hash = git_hash.decode()
-    except subprocess.CalledProcessError:
-        git_hash = None
-    return git_hash
 
-
-# add git hash
-extra_conf = {
-    'git_hash': get_git_commit_hash()
-}
+neox_args = NeoXArgs.consume_deepy_args()
+deepspeed_main_args = neox_args.get_deepspeed_main_args()
 
 # Extract wandb API key and inject into worker environments
-wandb_token = get_wandb_api_key()
+wandb_token = get_wandb_api_key(neox_args=neox_args)
 if wandb_token is not None:
     deepspeed.launcher.runner.EXPORT_ENVS.append('WANDB_API_KEY')
     os.environ['WANDB_API_KEY'] = wandb_token
 
-old_style_args, conf = ConfigMonster().consume_args(extra_conf=extra_conf)
-
-if 'log-dir' in conf:
-    os.makedirs(conf['log-dir'], exist_ok=True)
-    file_prefix = os.path.join(conf['log-dir'], '0-deepy')
-    Tee(file_prefix + '_stdout.txt', err=False)
-    Tee(file_prefix + '_stderr.txt', err=True)
-
-if 'save' in conf:
-    os.makedirs(conf['save'], exist_ok=True)
-    config_file = os.path.join(conf['save'], 'config.yml')
-    with open(config_file, 'w') as f:
-        json.dump(conf, f, indent=4)
-
 if __name__ == '__main__':
-    main(old_style_args)
+    main(deepspeed_main_args)
