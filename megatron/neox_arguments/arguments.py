@@ -77,6 +77,9 @@ BASE_CLASSES = [
 DEEPSPEED_ARG_CLASSES = [NeoXArgsDeepspeedRunner, NeoXArgsDeepspeedConfig]
 NEOX_ARG_CLASSES = [i for i in BASE_CLASSES if i not in DEEPSPEED_ARG_CLASSES]
 
+if "DLTS_HOSTFILE" in os.environ:
+    DLTS_HOSTFILE = os.environ["DLTS_HOSTFILE"]
+
 
 @dataclass
 class NeoXArgs(*BASE_CLASSES):
@@ -280,6 +283,15 @@ class NeoXArgs(*BASE_CLASSES):
             type=str,
             default=None,
             help="prefix to append to eval results file",
+        )
+        parser.add_argument(
+            "-H",
+            "--hostfile",
+            type=str,
+            default=DLTS_HOSTFILE,
+            help="Hostfile path (in MPI style) that defines the "
+                 "resource pool available to the job (e.g., "
+                 "worker-0 slots=4)"
         )
         group = parser.add_argument_group(title="Generation args")
         group.add_argument(
@@ -854,7 +866,7 @@ class NeoXArgs(*BASE_CLASSES):
         if self.hidden_size % self.num_attention_heads != 0:
             error_message = (
                 self.__class__.__name__
-                + ".validate_values() hidden_size must be divisable by num_attention_heads"
+                + ".validate_values() hidden_size must be divisible by num_attention_heads"
             )
             logging.error(error_message)
             raise ValueError(error_message)

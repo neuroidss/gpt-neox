@@ -1,4 +1,3 @@
-# coding=utf-8
 #
 # Copyright 2021 Biderman et al. This file is based on code by the authors denoted below and has been modified from its original version.
 #
@@ -304,7 +303,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
 
     def inference_mode(self, use_cache=True):
         """
-        Sets up the model for inference by turning on k/v caching (if specificied) and setting `parallel output` of the final layer to false,
+        Sets up the model for inference by turning on k/v caching (if specified) and setting `parallel output` of the final layer to false,
         so logits are gathered across model parallel ranks.
 
         :param cache: (bool) True if you want to use caching during inference, False otherwise
@@ -323,7 +322,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
         recursive_setattr(self.forward_funcs, "use_cache", False)
         # then set parallel output to true (more efficient training)
         self._set_parallel_output(True)
-    
+
     def clear_cache(self):
         """
         Recursively clears the kv cache on all layers

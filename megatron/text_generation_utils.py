@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright (c) 2021  Josh Levy-Kramer <josh@levykramer.co.uk>. All rights reserved.
 # This file is based on code by the authors denoted below and has been modified from its original version.
 # Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
@@ -43,7 +42,7 @@ def get_batch(neox_args, context_tokens: torch.Tensor):
 
     # Move to GPU.
     tokens = context_tokens.contiguous().cuda()
-    # Get the attention mask and postition ids.
+    # Get the attention mask and position ids.
     attention_mask, _, position_ids = get_ltor_masks_and_position_ids(
         data=tokens,
         eod_token=neox_args.tokenizer.eod,
@@ -237,9 +236,10 @@ def stream_tokens(
     # convert to tensor and broadcast
     context_tokens = torch.cuda.LongTensor(context_tokens)
     if stop_tokens:
-        stop_tokens = torch.cuda.LongTensor(stop_tokens)
-        if stop_tokens.ndim == 1:
-            stop_tokens = stop_tokens.unsqueeze(0)
+        if len(stop_tokens) > 0 and type(stop_tokens[0]) is not list:
+            stop_tokens = [stop_tokens]
+        for i in range(0, len(stop_tokens)):
+            stop_tokens[i] = torch.cuda.LongTensor(stop_tokens[i])
 
     # Make sure context tokens + start tokens are the same across all ranks
     token_generation_start_index = torch.cuda.LongTensor(context_lengths)
@@ -436,7 +436,7 @@ def generate_samples_from_prompt(
     # generate completions
     generated_texts = []
     while True:
-        model.module.clear_cache() # clear kv cache between batches
+        model.module.clear_cache()  # clear kv cache between batches
 
         start_time = time.time()
         # Tokenize text, and check whether we should terminate process
@@ -636,7 +636,7 @@ def generate_samples_unconditional(
 
     number_of_samples (default 10): number of unconditional samples to be generated
 
-    output_file: file where generation results are to be stored in jsonl format. no file will be stored if ommitted
+    output_file: file where generation results are to be stored in jsonl format. no file will be stored if omitted
 
     eos_token_id: end of text token at which completion is terminated, even if max_tokes count has not been reached
     maximum_tokens: maximum number of tokens to be generated
@@ -718,7 +718,7 @@ def generate_samples_interactive(
     """
 
     while True:
-        model.module.clear_cache() # clear kv cache between batches
+        model.module.clear_cache()  # clear kv cache between batches
         torch.distributed.barrier(group=mpu.get_model_parallel_group())
         terminate_runs = 0
 
@@ -767,11 +767,10 @@ def generate_samples_interactive(
                     .tolist()[
                         batch_token_generation_start_index[0]
                         .item() : batch_token_generation_end_index[0]
-                        .item()
+                        .item() + 1
                     ]
                 )
                 generated_text = neox_args.tokenizer.detokenize(generated_tokens)
-
-        print_rank_0("Generated Text: " + generated_text)
+                print_rank_0("Generated Text: " + generated_text)
         if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
             _ = input("\n<press enter to continue>")
